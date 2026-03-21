@@ -1,0 +1,45 @@
+{
+  "identifier" : "RoadTrackConfiguration",
+  "nonRenewingSubscriptions" : [ ],
+  "products" : [
+    {
+      "displayPrice" : "7.99",
+      "familyShareable" : false,
+      "internalID" : "roadtrack.premium.monthly",
+      "localizations" : [
+        {
+          "description" : "Monthly premium access for RoadTrack.",
+          "displayName" : "Premium Monthly",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "roadtrack.premium.monthly",
+      "referenceName" : "Premium Monthly",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "59.99",
+      "familyShareable" : false,
+      "internalID" : "roadtrack.premium.yearly",
+      "localizations" : [
+        {
+          "description" : "Yearly premium access for RoadTrack.",
+          "displayName" : "Premium Yearly",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "roadtrack.premium.yearly",
+      "referenceName" : "Premium Yearly",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "locale" : "en_US",
+    "storefront" : "USA"
+  },
+  "subscriptionGroups" : [ ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

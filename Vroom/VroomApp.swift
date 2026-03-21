@@ -1,32 +1,20 @@
-//
-//  VroomApp.swift
-//  Vroom
-//
-//  Created by Yehosua Hércules on 19/03/26.
-//
-
 import SwiftUI
-import SwiftData
 
 @main
-struct VroomApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+struct RoadTrackApp: App {
+    @StateObject private var appState: AppStateStore
 
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    init() {
+        let processInfo = ProcessInfo.processInfo
+        let useInMemoryStore = processInfo.arguments.contains("UITestingSeedPreviewData")
+            || processInfo.arguments.contains("UITestingInMemoryStore")
+        _appState = StateObject(wrappedValue: AppStateStore(container: AppContainer.live(inMemory: useInMemoryStore)))
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootScene()
+                .environmentObject(appState)
         }
-        .modelContainer(sharedModelContainer)
     }
 }

@@ -21,6 +21,13 @@ struct VehicleEditorDraft: Sendable {
     }
 }
 
+struct AppBanner: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String?
+    let tone: RoadBannerTone
+}
+
 @MainActor
 final class AppStateStore: ObservableObject {
     @Published var isBootstrapping = true
@@ -43,8 +50,10 @@ final class AppStateStore: ObservableObject {
     @Published var subscriptionSnapshot: SubscriptionSnapshot = .free
     @Published var storeProducts: [StoreProductSnapshot] = []
     @Published var exportedDataURL: URL?
+    @Published var currentBanner: AppBanner?
     @Published var currentAlertMessage: String?
     @Published var selectedVehicleFilter: UUID?
+    @Published private var routeAssetCache = DriveRouteAssetCache()
 
     private let container: AppContainer
     private var sessionObservationTask: Task<Void, Never>?
@@ -52,6 +61,8 @@ final class AppStateStore: ObservableObject {
     private var driveEventsByID: [UUID: [DrivingEvent]] = [:]
     private var zoneRunsByID: [UUID: [SpeedZoneRun]] = [:]
     private var hasBootstrappedOnce = false
+    private var routeLoadTasks: [UUID: Task<[RoutePointSample], Never>] = [:]
+    private var routePreviewTasks: [DriveRoutePreviewKey: Task<Data?, Never>] = [:]
 
     init(container: AppContainer) {
         self.container = container
@@ -77,6 +88,7 @@ final class AppStateStore: ObservableObject {
     }
 
     func refreshData() async {
+        let previousMapStyle = preferences.mapStyle
         do {
             profile = try await container.profileRepository.loadProfile()
             preferences = try await container.preferencesRepository.loadPreferences()
@@ -97,6 +109,10 @@ final class AppStateStore: ObservableObject {
             for zone in zones {
                 zoneRunsByID[zone.id] = try await container.zoneRepository.runsForZone(id: zone.id)
             }
+            if previousMapStyle != preferences.mapStyle {
+                routeAssetCache.invalidatePreviews()
+            }
+            pruneRouteAssets()
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -159,6 +175,7 @@ final class AppStateStore: ObservableObject {
                 try await container.vehicleRepository.saveVehicle(vehicle)
             }
             await refreshData()
+            showBanner(title: "Setup complete", message: "Your drives will appear here after the first route is saved.", tone: .success)
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -183,6 +200,7 @@ final class AppStateStore: ObservableObject {
                 }
             }
             await refreshData()
+            showBanner(title: vehicle == nil ? "Vehicle added" : "Vehicle saved", message: savedVehicle.nickname, tone: .success)
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -192,6 +210,7 @@ final class AppStateStore: ObservableObject {
         do {
             try await container.vehicleRepository.archiveVehicle(id: vehicle.id)
             await refreshData()
+            showBanner(title: "Vehicle archived", message: "\(vehicle.nickname) was removed from the active garage.", tone: .warning)
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -201,6 +220,7 @@ final class AppStateStore: ObservableObject {
         do {
             let vehicleID = selectedVehicleFilter ?? profile?.defaultVehicleID ?? vehicles.first?.id
             try await container.driveTrackingService.startManualDrive(vehicleID: vehicleID)
+            showBanner(title: "Drive started", message: "Vroom is tracking this route now.", tone: .info)
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -220,6 +240,11 @@ final class AppStateStore: ObservableObject {
         do {
             try await container.driveRepository.setFavorite(driveID: drive.id, isFavorite: !drive.favorite)
             await refreshData()
+            showBanner(
+                title: drive.favorite ? "Removed from saved drives" : "Saved drive",
+                message: drive.summary.title,
+                tone: .success
+            )
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -252,7 +277,32 @@ final class AppStateStore: ObservableObject {
     }
 
     func loadTrace(for driveID: UUID) async -> [RoutePointSample] {
-        (try? await container.routeTraceRepository.loadTrace(for: driveID)) ?? []
+        await ensureRouteAssets(for: driveID)
+        return routeAssetCache.loadState(for: driveID).trace ?? []
+    }
+
+    func routeLoadState(for driveID: UUID) -> DriveRouteLoadState {
+        routeAssetCache.loadState(for: driveID)
+    }
+
+    func routePreviewState(for driveID: UUID, size: CGSize, style: AppMapStyle? = nil) -> DriveRoutePreviewState {
+        let key = DriveRoutePreviewKey(driveID: driveID, mapStyle: style ?? preferences.mapStyle, size: size)
+        return routeAssetCache.previewState(for: key)
+    }
+
+    func ensureRouteAssets(
+        for driveID: UUID,
+        includePreview: Bool = false,
+        previewSize: CGSize = .zero,
+        forceReload: Bool = false,
+        mapStyle: AppMapStyle? = nil
+    ) async {
+        let trace = await resolveRouteTrace(for: driveID, forceReload: forceReload)
+        guard includePreview else { return }
+
+        let key = DriveRoutePreviewKey(driveID: driveID, mapStyle: mapStyle ?? preferences.mapStyle, size: previewSize)
+        guard previewSize.width > 0, previewSize.height > 0 else { return }
+        await resolveRoutePreview(for: key, trace: trace)
     }
 
     func sharePayload(for drive: Drive) async -> SharePayload {
@@ -274,15 +324,22 @@ final class AppStateStore: ObservableObject {
         do {
             subscriptionSnapshot = try await container.storefrontService.purchase(productID: productID)
             await refreshStoreProducts()
+            if subscriptionSnapshot.tier == .premium {
+                showBanner(title: "Premium unlocked", message: "More insight is now available after each drive.", tone: .success)
+            }
         } catch {
             currentAlertMessage = error.localizedDescription
         }
     }
 
     func updatePreferences(_ updated: AppPreferences) async {
+        let previousStyle = preferences.mapStyle
         do {
             try await container.preferencesRepository.savePreferences(updated)
             preferences = updated
+            if previousStyle != updated.mapStyle {
+                routeAssetCache.invalidatePreviews()
+            }
             await refreshData()
             await container.driveTrackingService.startMonitoring()
         } catch {
@@ -293,6 +350,11 @@ final class AppStateStore: ObservableObject {
     func restorePremium() async {
         do {
             subscriptionSnapshot = try await container.storefrontService.restorePurchases()
+            if subscriptionSnapshot.tier == .premium {
+                showBanner(title: "Purchases restored", message: "Premium is active on this device.", tone: .success)
+            } else {
+                showBanner(title: "No purchases found", message: "This Apple ID does not have an active Vroom Premium plan.", tone: .info)
+            }
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -314,6 +376,7 @@ final class AppStateStore: ObservableObject {
             let data = try JSONEncoder().encode(bundle)
             try data.write(to: url, options: .atomic)
             exportedDataURL = url
+            showBanner(title: "Export ready", message: "Use Share Export to send the file.", tone: .success)
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -338,7 +401,11 @@ final class AppStateStore: ObservableObject {
             try context.save()
             try await container.subscriptionRepository.clearSnapshot()
             exportedDataURL = nil
+            routeAssetCache = DriveRouteAssetCache()
+            routeLoadTasks.removeAll()
+            routePreviewTasks.removeAll()
             await refreshData()
+            showBanner(title: "Local data deleted", message: "This device no longer has saved Vroom data.", tone: .warning)
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -364,6 +431,22 @@ final class AppStateStore: ObservableObject {
 
     func clearAlert() {
         currentAlertMessage = nil
+    }
+
+    func clearBanner() {
+        currentBanner = nil
+    }
+
+    private func showBanner(title: String, message: String? = nil, tone: RoadBannerTone) {
+        currentBanner = AppBanner(title: title, message: message, tone: tone)
+        switch tone {
+        case .success:
+            RoadFeedback.notify(.success)
+        case .info:
+            RoadFeedback.impact(.light)
+        case .warning:
+            RoadFeedback.notify(.warning)
+        }
     }
 
     private func observeDriveCoordinator() async {
@@ -613,5 +696,66 @@ final class AppStateStore: ObservableObject {
                 headingAccuracy: sample.headingAccuracy
             )
         }
+    }
+
+    private func resolveRouteTrace(for driveID: UUID, forceReload: Bool) async -> [RoutePointSample] {
+        if !forceReload, let trace = routeAssetCache.loadState(for: driveID).trace {
+            return trace
+        }
+
+        if let existingTask = routeLoadTasks[driveID] {
+            return await existingTask.value
+        }
+
+        routeAssetCache.setLoadState(.loading, for: driveID)
+        let task = Task { [container] in
+            (try? await container.routeTraceRepository.loadTrace(for: driveID)) ?? []
+        }
+        routeLoadTasks[driveID] = task
+        let trace = await task.value
+        routeLoadTasks[driveID] = nil
+        routeAssetCache.setLoadState(trace.isEmpty ? .unavailable : .ready(trace), for: driveID)
+        return trace
+    }
+
+    private func resolveRoutePreview(for key: DriveRoutePreviewKey, trace: [RoutePointSample]) async {
+        guard !trace.isEmpty else {
+            routeAssetCache.setPreviewState(.unavailable, for: key)
+            return
+        }
+
+        switch routeAssetCache.previewState(for: key) {
+        case .ready, .loading:
+            if let existingTask = routePreviewTasks[key] {
+                _ = await existingTask.value
+            }
+            return
+        case .idle, .unavailable:
+            break
+        }
+
+        routeAssetCache.setPreviewState(.loading, for: key)
+        let task = Task { [container] in
+            await container.mapRenderingService.renderRouteSnapshot(
+                RouteSnapshotRequest(
+                    driveID: key.driveID,
+                    trace: trace,
+                    size: key.size,
+                    style: key.mapStyle
+                )
+            )
+        }
+        routePreviewTasks[key] = task
+        let data = await task.value
+        routePreviewTasks[key] = nil
+        routeAssetCache.setPreviewState(data.map(DriveRoutePreviewState.ready) ?? .unavailable, for: key)
+    }
+
+    private func pruneRouteAssets() {
+        var keepIDs = Set(drives.map(\.id))
+        if let activeDriveID = activeDriveSession?.sessionID {
+            keepIDs.insert(activeDriveID)
+        }
+        routeAssetCache.prune(keeping: keepIDs)
     }
 }

@@ -6,61 +6,51 @@ struct ConvoysView: View {
     var body: some View {
         RoadScreenScaffold(bottomPadding: 40) {
             RoadPageHeader(
-                title: "Convoys beta",
-                subtitle: "Room history is available, but live convoy syncing is still offline."
+                title: "Convoys preview",
+                subtitle: "This build does not include live convoy rooms yet. The preview stays here so the future direction is visible without pretending the feature is active."
             )
 
-            availabilitySection
+            RoadStateCard(
+                title: "What Convoys is for",
+                message: "When it ships, Convoys will help nearby drivers stay coordinated without turning the Drive tab into a social dashboard.",
+                icon: "person.3.fill",
+                tone: .info
+            )
 
-            if !appState.recentConvoys.isEmpty {
-                recentConvoys
-            }
-        }
-        .navigationTitle("Convoys")
-    }
-
-    private var availabilitySection: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: "Availability",
-                    subtitle: "You can still create a room code and review saved rooms, but real-time updates are not active yet."
+            if appState.recentConvoys.isEmpty {
+                RoadEmptyState(
+                    title: "No saved rooms",
+                    message: "Any room codes that were previously stored on this device will appear here.",
+                    icon: "person.3.sequence"
                 )
+            } else {
+                VStack(alignment: .leading, spacing: RoadSpacing.compact) {
+                    RoadSectionHeader(
+                        title: "Recent rooms",
+                        subtitle: "Previously saved room codes remain visible even while live convoy syncing is unavailable."
+                    )
 
-                Button("Create room") {
-                    Task { await appState.createConvoy() }
-                }
-                .buttonStyle(RoadPrimaryButtonStyle())
-            }
-        }
-    }
+                    RoadGroupedRows {
+                        ForEach(Array(appState.recentConvoys.enumerated()), id: \.element.id) { index, convoy in
+                            RoadInfoRow(
+                                icon: convoy.status.iconName,
+                                iconTint: RoadTheme.info,
+                                title: convoy.joinCode,
+                                subtitle: RoadFormatting.shortDate.string(from: convoy.createdAt)
+                            ) {
+                                RoadCapsuleLabel(text: convoy.status.displayTitle, tint: RoadTheme.info)
+                            }
+                            .padding(.vertical, RoadSpacing.xSmall)
 
-    private var recentConvoys: some View {
-        VStack(alignment: .leading, spacing: RoadSpacing.compact) {
-            RoadSectionHeader(
-                title: "Recent rooms",
-                subtitle: "Saved room codes remain visible even while live syncing is unavailable."
-            )
-
-            ForEach(appState.recentConvoys) { convoy in
-                RoadPanel {
-                    HStack {
-                        VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
-                            Text(convoy.joinCode)
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(RoadTheme.textPrimary)
-
-                            Text(RoadFormatting.shortDate.string(from: convoy.createdAt))
-                                .font(RoadTypography.caption)
-                                .foregroundStyle(RoadTheme.textMuted)
+                            if index < appState.recentConvoys.count - 1 {
+                                RoadRowDivider()
+                            }
                         }
-
-                        Spacer()
-
-                        RoadCapsuleLabel(text: convoy.status.displayTitle, tint: RoadTheme.primaryAction, icon: convoy.status.iconName)
                     }
                 }
             }
         }
+        .navigationTitle("Convoys")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

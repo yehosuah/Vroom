@@ -4,116 +4,170 @@ struct PaywallView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var appState: AppStateStore
 
+    @State private var selectedProductID: String?
+    @State private var isPurchasing = false
+
+    private var selectedProduct: StoreProductSnapshot? {
+        appState.storeProducts.first(where: { $0.productID == selectedProductID }) ?? appState.storeProducts.first
+    }
+
     private var statusSubtitle: String {
         if appState.subscriptionSnapshot.tier == .premium {
             return "Premium is already active on this device."
         }
-        return "Review current plans and restore an existing purchase if needed."
+        return "Upgrade when you want the current premium surfaces unlocked and future premium expansions ready as they ship."
     }
 
     var body: some View {
-        NavigationStack {
-            RoadScreenScaffold(bottomPadding: 40) {
-                RoadPageHeader(
-                    title: "Premium",
-                    subtitle: statusSubtitle,
-                    badgeText: appState.subscriptionSnapshot.tier.displayTitle,
-                    badgeAccent: appState.subscriptionSnapshot.tier == .premium ? .success : .premium
-                )
+        RoadScreenScaffold(bottomPadding: 148) {
+            RoadHeroPanel {
+                VStack(alignment: .leading, spacing: RoadSpacing.regular) {
+                    HStack(alignment: .top, spacing: RoadSpacing.compact) {
+                        VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                            Text("Vroom Premium")
+                                .font(RoadTypography.sectionTitle)
+                                .foregroundStyle(RoadTheme.textPrimary)
 
-                benefitsSection
-                productSection
+                            Text(statusSubtitle)
+                                .font(RoadTypography.supporting)
+                                .foregroundStyle(RoadTheme.textSecondary)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        RoadCapsuleLabel(
+                            text: appState.subscriptionSnapshot.tier.displayTitle,
+                            tint: appState.subscriptionSnapshot.tier == .premium ? RoadTheme.success : RoadTheme.premium,
+                            icon: appState.subscriptionSnapshot.tier.iconName
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: RoadSpacing.compact) {
+                        featureRow(
+                            title: "Deeper insight surfaces",
+                            detail: "Keep richer insight summaries ready as your drive history grows."
+                        )
+                        featureRow(
+                            title: "Premium-ready share and route extras",
+                            detail: "Unlock premium surfaces without needing to revisit setup when more premium capabilities land."
+                        )
+                    }
+                }
             }
-            .navigationTitle("Premium")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+
+            productSection
+
+            RoadStateCard(
+                title: "Restore is always available",
+                message: "If Premium is already tied to this Apple ID, you do not need to buy again. Use Restore Purchases instead.",
+                icon: "arrow.clockwise",
+                tone: .info
+            )
+        }
+        .navigationTitle("Premium")
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            RoadBottomActionBar {
+                VStack(alignment: .leading, spacing: RoadSpacing.regular) {
+                    Button(primaryCTA) {
+                        guard let product = selectedProduct else { return }
+                        Task {
+                            isPurchasing = true
+                            await appState.purchasePremium(productID: product.productID)
+                            isPurchasing = false
+                        }
+                    }
+                    .buttonStyle(RoadPrimaryButtonStyle())
+                    .disabled(appState.subscriptionSnapshot.tier == .premium || selectedProduct == nil || isPurchasing)
+
+                    Button("Restore Purchases") {
+                        Task { await appState.restorePremium() }
+                    }
+                    .buttonStyle(RoadSecondaryButtonStyle())
                 }
             }
         }
-    }
-
-    private var benefitsSection: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: "Included today",
-                    subtitle: "Only benefits that are currently reflected in the app are listed here."
-                )
-
-                featureRow(
-                    title: "Expanded insights",
-                    detail: "Review trend summaries, top speeds, and saved segments in one place."
-                )
-                featureRow(
-                    title: "Drive sharing",
-                    detail: "Generate a summary and image for completed drives."
-                )
-                featureRow(
-                    title: "Future premium updates",
-                    detail: "Convoys are still limited while live syncing is offline."
-                )
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }
+            }
+        }
+        .task {
+            await appState.refreshStoreProducts()
+            if selectedProductID == nil {
+                selectedProductID = appState.storeProducts.first?.productID
             }
         }
     }
 
     private var productSection: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: "Plans",
-                    subtitle: "Choose a plan below or restore a purchase made on this Apple ID."
-                )
+        VStack(alignment: .leading, spacing: RoadSpacing.compact) {
+            RoadSectionHeader(
+                title: "Choose a plan",
+                subtitle: "Pick the plan you want before continuing."
+            )
 
-                if appState.storeProducts.isEmpty {
-                    RoadEmptyState(
-                        title: "Plans are unavailable",
-                        message: "Restore your purchases or try again when products are available on this device.",
-                        icon: "creditcard"
-                    )
-                } else {
+            if appState.storeProducts.isEmpty {
+                RoadEmptyState(
+                    title: "Plans are unavailable",
+                    message: "Try again when StoreKit products are available on this device.",
+                    icon: "creditcard"
+                )
+            } else {
+                VStack(alignment: .leading, spacing: RoadSpacing.compact) {
                     ForEach(appState.storeProducts) { product in
                         Button {
-                            Task { await appState.purchasePremium(productID: product.productID) }
+                            selectedProductID = product.productID
                         } label: {
-                            HStack(spacing: RoadSpacing.regular) {
-                                VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
-                                    Text(product.displayName)
-                                        .font(.headline.weight(.semibold))
-                                        .foregroundStyle(RoadTheme.textPrimary)
-
-                                    Text(product.priceDisplay)
-                                        .font(RoadTypography.supporting)
-                                        .foregroundStyle(RoadTheme.textSecondary)
-                                }
-
-                                Spacer()
-
-                                Text(appState.subscriptionSnapshot.tier == .premium ? "Current plan" : "Choose plan")
-                                    .font(RoadTypography.caption.weight(.semibold))
-                                    .foregroundStyle(RoadTheme.primaryAction)
-                            }
-                            .padding(RoadSpacing.regular)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                                    .fill(RoadTheme.backgroundRaised)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                                    .strokeBorder(RoadTheme.border)
-                            }
+                            planRow(product)
                         }
                         .buttonStyle(.plain)
                     }
                 }
-
-                Button("Restore purchases") {
-                    Task { await appState.restorePremium() }
-                }
-                .buttonStyle(RoadSecondaryButtonStyle())
             }
         }
+    }
+
+    private func planRow(_ product: StoreProductSnapshot) -> some View {
+        let isSelected = product.productID == (selectedProductID ?? appState.storeProducts.first?.productID)
+
+        return RoadPanel {
+            HStack(spacing: RoadSpacing.regular) {
+                VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                    Text(product.displayName)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(RoadTheme.textPrimary)
+
+                    Text(product.priceDisplay)
+                        .font(RoadTypography.supporting)
+                        .foregroundStyle(RoadTheme.textSecondary)
+                }
+
+                Spacer()
+
+                RoadCapsuleLabel(
+                    text: appState.subscriptionSnapshot.tier == .premium && isSelected ? "Current" : (isSelected ? "Selected" : "Plan"),
+                    tint: isSelected ? RoadTheme.primaryAction : RoadTheme.textMuted
+                )
+            }
+            .padding(.vertical, 2)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: RoadRadius.large, style: .continuous)
+                .strokeBorder(isSelected ? RoadTheme.primaryAction.opacity(0.4) : RoadTheme.border, lineWidth: isSelected ? 2 : 1)
+        }
+    }
+
+    private var primaryCTA: String {
+        if appState.subscriptionSnapshot.tier == .premium {
+            return "Premium Active"
+        }
+
+        if let selectedProduct {
+            return "Continue with \(selectedProduct.displayName)"
+        }
+
+        return "Continue"
     }
 
     private func featureRow(title: String, detail: String) -> some View {

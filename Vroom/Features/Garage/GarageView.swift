@@ -2,11 +2,12 @@ import SwiftUI
 
 struct GarageView: View {
     @EnvironmentObject private var appState: AppStateStore
+
     @State private var showingPaywall = false
     @State private var editingVehicle: Vehicle?
     @State private var showingVehicleEditor = false
 
-    private var garageTitle: String {
+    private var displayName: String {
         let name = appState.profile?.displayName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if name.isEmpty || name == "Driver" || name == "Vroom Driver" {
             return "Garage"
@@ -14,66 +15,167 @@ struct GarageView: View {
         return name
     }
 
-    private var summaryMetrics: [RoadMetricPresentation] {
-        [
-            RoadMetricPresentation(id: "garage-primary", label: "Primary vehicle", value: appState.primaryVehicle?.nickname ?? "Not set", icon: "car.fill", accent: .neutral),
-            RoadMetricPresentation(id: "garage-drives", label: "Drives", value: "\(appState.drives.count)", icon: "road.lanes", accent: .electric),
-            RoadMetricPresentation(id: "garage-tier", label: "Plan", value: appState.subscriptionSnapshot.tier.displayTitle, icon: appState.subscriptionSnapshot.tier.iconName, accent: .premium)
-        ]
-    }
+    private var readinessMessage: (title: String, message: String, tone: RoadStateTone, icon: String)? {
+        if appState.vehicles.isEmpty {
+            return (
+                "Add a vehicle before the next drive",
+                "Garage is ready, but a default vehicle will make history and drive details more coherent from the start.",
+                .info,
+                "car.fill"
+            )
+        }
 
-    private var showsLocationRequest: Bool {
-        appState.permissionState.location != .whenInUse && appState.permissionState.location != .always
-    }
+        let locationReady = appState.permissionState.location == .always
+        let motionReady = appState.permissionState.motion == .authorized
+        let notificationsReady = appState.permissionState.notifications == .authorized || appState.permissionState.notifications == .provisional
 
-    private var showsMotionRequest: Bool {
-        appState.permissionState.motion != .authorized
-    }
+        if !locationReady || !motionReady || !notificationsReady {
+            return (
+                "Settings still need attention",
+                "Finish permissions in Settings so the next drive records more reliably and Vroom can confirm what happened after it ends.",
+                .warning,
+                "gearshape"
+            )
+        }
 
-    private var showsNotificationRequest: Bool {
-        appState.permissionState.notifications != .authorized && appState.permissionState.notifications != .provisional
+        return nil
     }
 
     var body: some View {
-        RoadScreenScaffold {
-            RoadPageHeader(
-                title: garageTitle,
-                subtitle: "Manage vehicles, premium, preferences, permissions, and local data.",
-                badgeText: appState.subscriptionSnapshot.tier.displayTitle,
-                badgeAccent: appState.subscriptionSnapshot.tier == .premium ? .success : .premium
-            )
+        RoadScreenScaffold(bottomPadding: 40) {
+            profileSection
 
-            RoadPanel {
-                RoadMetricGrid(metrics: summaryMetrics, minimumWidth: 120)
+            if let readinessMessage {
+                RoadStateCard(
+                    title: readinessMessage.title,
+                    message: readinessMessage.message,
+                    icon: readinessMessage.icon,
+                    tone: readinessMessage.tone
+                )
             }
 
-            vehicleSection
+            manageSection
             premiumSection
-            preferencesSection
-            permissionsSection
-            dataSection
+            vehicleSection
         }
+        .navigationTitle("Garage")
+        .navigationBarTitleDisplayMode(.large)
         .task {
             await appState.refreshData()
         }
-        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showingPaywall) {
-            PaywallView()
-                .environmentObject(appState)
+            NavigationStack {
+                PaywallView()
+                    .environmentObject(appState)
+            }
         }
         .sheet(isPresented: $showingVehicleEditor) {
             VehicleEditorView(editingVehicle: editingVehicle)
                 .environmentObject(appState)
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    Image(systemName: "gearshape")
+                        .foregroundStyle(RoadTheme.textPrimary)
+                }
+            }
+        }
         .accessibilityIdentifier("Garage.Screen")
+    }
+
+    private var profileSection: some View {
+        RoadHeroPanel {
+            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
+                HStack(alignment: .top, spacing: RoadSpacing.compact) {
+                    VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                        Text(displayName)
+                            .font(RoadTypography.sectionTitle)
+                            .foregroundStyle(RoadTheme.textPrimary)
+
+                        Text("Vehicles, plan status, and the defaults Vroom should remember.")
+                            .font(RoadTypography.supporting)
+                            .foregroundStyle(RoadTheme.textSecondary)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    RoadCapsuleLabel(
+                        text: appState.subscriptionSnapshot.tier.displayTitle,
+                        tint: appState.subscriptionSnapshot.tier == .premium ? RoadTheme.success : RoadTheme.primaryAction,
+                        icon: appState.subscriptionSnapshot.tier.iconName
+                    )
+                }
+
+                HStack(spacing: RoadSpacing.compact) {
+                    profileStat(title: "Vehicles", value: "\(appState.vehicles.count)")
+                    profileStat(title: "Drives", value: "\(appState.drives.count)")
+                    profileStat(title: "Default", value: appState.primaryVehicle?.nickname ?? "None")
+                }
+            }
+        }
+    }
+
+    private var manageSection: some View {
+        VStack(alignment: .leading, spacing: RoadSpacing.compact) {
+            RoadSectionHeader(
+                title: "Manage",
+                subtitle: "Open the surfaces that should stay available, but not constantly compete with vehicle management."
+            )
+
+            RoadGroupedRows {
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    RoadNavigationRow(
+                        icon: "gearshape.fill",
+                        iconTint: RoadTheme.info,
+                        title: "Settings and privacy",
+                        subtitle: "Preferences, permissions, export, and local data controls."
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var premiumSection: some View {
+        RoadPanel {
+            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
+                RoadSectionHeader(
+                    title: appState.subscriptionSnapshot.tier == .premium ? "Premium is active" : "Vroom Premium",
+                    subtitle: appState.subscriptionSnapshot.tier == .premium
+                        ? "Premium is active on this device and ready wherever deeper insight appears."
+                        : "Upgrade when you want deeper insight surfaces and future premium capabilities."
+                )
+
+                RoadActionGroup(actions: [
+                    RoadActionItem(id: "garage-premium") {
+                        Button(appState.subscriptionSnapshot.tier == .premium ? "Manage Premium" : "See Premium Plans") {
+                            showingPaywall = true
+                        }
+                        .buttonStyle(RoadPrimaryButtonStyle())
+                        .accessibilityIdentifier("Garage.Premium")
+                    },
+                    RoadActionItem(id: "garage-restore") {
+                        Button("Restore Purchases") {
+                            Task { await appState.restorePremium() }
+                        }
+                        .buttonStyle(RoadSecondaryButtonStyle())
+                    }
+                ])
+            }
+        }
     }
 
     private var vehicleSection: some View {
         VStack(alignment: .leading, spacing: RoadSpacing.compact) {
             RoadSectionHeader(
                 title: "Vehicles",
-                subtitle: "Add, edit, and choose the vehicles used by default.",
-                actionLabel: "Add vehicle"
+                subtitle: "Add, edit, and choose the default vehicle for new drives.",
+                actionLabel: "Add Vehicle"
             ) {
                 editingVehicle = nil
                 showingVehicleEditor = true
@@ -82,304 +184,86 @@ struct GarageView: View {
             if appState.vehicles.isEmpty {
                 RoadEmptyState(
                     title: "No vehicles added",
-                    message: "Add a vehicle to keep your drive history organized.",
+                    message: "Add a vehicle so new drives land in history with clearer context from the start.",
                     icon: "car.fill",
-                    actionLabel: "Add vehicle"
+                    actionLabel: "Add Vehicle"
                 ) {
                     editingVehicle = nil
                     showingVehicleEditor = true
                 }
             } else {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 280), spacing: RoadSpacing.regular, alignment: .top)],
-                    alignment: .leading,
-                    spacing: RoadSpacing.regular
-                ) {
-                    ForEach(appState.vehicles) { vehicle in
+                RoadGroupedRows {
+                    ForEach(Array(appState.vehicles.enumerated()), id: \.element.id) { index, vehicle in
                         Button {
                             editingVehicle = vehicle
                             showingVehicleEditor = true
                         } label: {
-                            vehicleCard(for: vehicle)
+                            vehicleRow(vehicle)
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("Garage.Vehicle.\(vehicle.nickname.replacingOccurrences(of: " ", with: ""))")
+
+                        if index < appState.vehicles.count - 1 {
+                            RoadRowDivider()
+                        }
                     }
                 }
             }
         }
     }
 
-    private func vehicleCard(for vehicle: Vehicle) -> some View {
+    private func vehicleRow(_ vehicle: Vehicle) -> some View {
         let drives = appState.drives.filter { $0.vehicleID == vehicle.id }
         let averageScore = drives.isEmpty ? 0 : Double(drives.reduce(0) { $0 + $1.scoreSummary.overall }) / Double(drives.count)
-        let topSpeed = drives.map(\.topSpeedKPH).max() ?? 0
 
-        var metrics = [
-            RoadMetricPresentation(id: "vehicle-drives-\(vehicle.id)", label: "Drives", value: "\(drives.count)", icon: "road.lanes", accent: .neutral)
-        ]
-
-        if !drives.isEmpty {
-            metrics.append(RoadMetricPresentation(id: "vehicle-score-\(vehicle.id)", label: "Average score", value: RoadFormatting.decimal(averageScore, places: 0), icon: "rosette", accent: .success))
-        }
-
-        if topSpeed > 0 {
-            metrics.append(RoadMetricPresentation(id: "vehicle-top-\(vehicle.id)", label: "Top speed", value: RoadFormatting.speed(topSpeed), icon: "hare.fill", accent: .alert))
-        }
-
-        return RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
-                        Text(vehicle.nickname)
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(RoadTheme.textPrimary)
-
-                        Text(vehicle.displayName)
-                            .font(RoadTypography.caption)
-                            .foregroundStyle(RoadTheme.textSecondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 0)
+        return HStack(alignment: .top, spacing: RoadSpacing.compact) {
+            VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                HStack(spacing: RoadSpacing.small) {
+                    Text(vehicle.nickname)
+                        .font(RoadTypography.label)
+                        .foregroundStyle(RoadTheme.textPrimary)
 
                     if vehicle.isPrimary {
-                        RoadCapsuleLabel(text: "Primary", tint: RoadTheme.success)
+                        RoadCapsuleLabel(text: "Default", tint: RoadTheme.success)
                     }
                 }
 
-                if drives.isEmpty {
-                    Text("No saved drives for this vehicle yet.")
-                        .font(RoadTypography.supporting)
-                        .foregroundStyle(RoadTheme.textSecondary)
-                }
+                Text(vehicle.displayName)
+                    .font(RoadTypography.meta)
+                    .foregroundStyle(RoadTheme.textSecondary)
+                    .lineLimit(1)
 
-                RoadMetricGrid(metrics: metrics, minimumWidth: 120)
+                Text(drives.isEmpty ? "No saved drives yet" : "\(drives.count) drives • Avg score \(RoadFormatting.decimal(averageScore, places: 0))")
+                    .font(RoadTypography.caption)
+                    .foregroundStyle(RoadTheme.textMuted)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(RoadTheme.textMuted)
+                .padding(.top, 4)
         }
+        .padding(.vertical, RoadSpacing.small)
     }
 
-    private var premiumSection: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: "Premium",
-                    subtitle: appState.subscriptionSnapshot.tier == .premium
-                        ? "Premium is active on this device."
-                        : "Review current plans and pricing."
-                )
-
-                RoadActionGroup(actions: [
-                    RoadActionItem(id: "garage-premium") {
-                        Button(appState.subscriptionSnapshot.tier == .premium ? "Manage Premium" : "Upgrade to Premium") {
-                            showingPaywall = true
-                        }
-                        .buttonStyle(RoadPrimaryButtonStyle())
-                        .accessibilityIdentifier("Garage.Premium")
-                    },
-                    RoadActionItem(id: "garage-restore") {
-                        Button("Restore purchases") {
-                            Task { await appState.restorePremium() }
-                        }
-                        .buttonStyle(RoadSecondaryButtonStyle())
-                        .accessibilityIdentifier("Garage.Restore")
-                    }
-                ])
-            }
-        }
-    }
-
-    private var preferencesSection: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: "Preferences",
-                    subtitle: "Choose how Vroom shows maps, units, and replay behavior."
-                )
-
-                RoadOptionSelector(
-                    title: "Units",
-                    helper: "Used for speed and distance throughout the app.",
-                    selection: binding(\.units),
-                    options: UnitSystem.allCases.map {
-                        RoadOption(value: $0, title: $0.displayTitle, shortTitle: $0.displayTitle, icon: $0.iconName)
-                    }
-                )
-
-                RoadOptionSelector(
-                    title: "Map style",
-                    helper: "Used on the drive screen, in History, and in replay.",
-                    selection: binding(\.mapStyle),
-                    options: AppMapStyle.allCases.map {
-                        RoadOption(value: $0, title: $0.displayTitle, shortTitle: $0.shortTitle, icon: $0.iconName)
-                    }
-                )
-
-                RoadOptionSelector(
-                    title: "Battery mode",
-                    helper: "Choose how aggressively Vroom prioritizes tracking.",
-                    selection: binding(\.batteryMode),
-                    options: BatteryMode.allCases.map {
-                        RoadOption(value: $0, title: $0.displayTitle, shortTitle: $0.shortTitle, icon: $0.iconName)
-                    }
-                )
-
-                RoadFormField(title: "Replay autoplay", helper: "Start replay automatically when a saved drive opens.") {
-                    Toggle(isOn: Binding(get: { appState.preferences.replayAutoplay }, set: { newValue in
-                        var updated = appState.preferences
-                        updated.replayAutoplay = newValue
-                        Task { await appState.updatePreferences(updated) }
-                    })) {
-                        Text(appState.preferences.replayAutoplay ? "On" : "Off")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(RoadTheme.textPrimary)
-                    }
-                    .tint(RoadTheme.primaryAction)
-                    .padding(.horizontal, RoadSpacing.regular)
-                    .frame(minHeight: RoadHeight.regular)
-                    .background(
-                        RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                            .fill(RoadTheme.backgroundRaised)
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                            .strokeBorder(RoadTheme.border)
-                    }
-                }
-            }
-        }
-    }
-
-    private var permissionsSection: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: "Permissions",
-                    subtitle: "Check which permissions are available and request any that are still missing."
-                )
-
-                VStack(alignment: .leading, spacing: RoadSpacing.compact) {
-                    permissionRow(title: "Location", value: appState.permissionState.location.displayTitle, icon: appState.permissionState.location.iconName)
-                    permissionRow(title: "Motion", value: appState.permissionState.motion.displayTitle, icon: appState.permissionState.motion.iconName)
-                    permissionRow(title: "Notifications", value: appState.permissionState.notifications.displayTitle, icon: appState.permissionState.notifications.iconName)
-                }
-
-                if showsLocationRequest || showsMotionRequest || showsNotificationRequest {
-                    RoadActionGroup(actions: permissionActions)
-                }
-            }
-        }
-    }
-
-    private var permissionActions: [RoadActionItem] {
-        var actions: [RoadActionItem] = []
-
-        if showsLocationRequest {
-            actions.append(
-                RoadActionItem(id: "garage-request-location") {
-                    Button("Request location") {
-                        Task { await appState.requestLocationPermissions() }
-                    }
-                    .buttonStyle(RoadSecondaryButtonStyle())
-                }
-            )
-        }
-
-        if showsMotionRequest {
-            actions.append(
-                RoadActionItem(id: "garage-request-motion") {
-                    Button("Request motion") {
-                        Task { await appState.requestMotionPermissions() }
-                    }
-                    .buttonStyle(RoadSecondaryButtonStyle())
-                }
-            )
-        }
-
-        if showsNotificationRequest {
-            actions.append(
-                RoadActionItem(id: "garage-request-notifications") {
-                    Button("Request notifications") {
-                        Task { await appState.requestNotificationPermissions() }
-                    }
-                    .buttonStyle(RoadSecondaryButtonStyle())
-                }
-            )
-        }
-
-        return actions
-    }
-
-    private func permissionRow(title: String, value: String, icon: String) -> some View {
-        HStack(spacing: RoadSpacing.compact) {
-            Image(systemName: icon)
-                .foregroundStyle(RoadTheme.info)
-
+    private func profileStat(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(RoadTheme.textPrimary)
-
-            Spacer()
+                .font(RoadTypography.caption)
+                .foregroundStyle(RoadTheme.textMuted)
 
             Text(value)
-                .font(RoadTypography.caption)
-                .foregroundStyle(RoadTheme.textSecondary)
+                .font(RoadTypography.label)
+                .foregroundStyle(RoadTheme.textPrimary)
+                .lineLimit(1)
         }
-        .padding(.horizontal, RoadSpacing.regular)
-        .frame(minHeight: RoadHeight.regular)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(RoadSpacing.compact)
         .background(
             RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
                 .fill(RoadTheme.backgroundRaised)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                .strokeBorder(RoadTheme.border)
-        }
-    }
-
-    private var dataSection: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: "Data",
-                    subtitle: "Export or remove the data stored on this device."
-                )
-
-                RoadActionGroup(actions: [
-                    RoadActionItem(id: "garage-export") {
-                        Button("Export data") {
-                            Task { await appState.exportLocalData() }
-                        }
-                        .buttonStyle(RoadPrimaryButtonStyle())
-                    },
-                    RoadActionItem(id: "garage-delete") {
-                        Button("Delete local data", role: .destructive) {
-                            Task { await appState.resetLocalData() }
-                        }
-                        .buttonStyle(RoadSecondaryButtonStyle())
-                    }
-                ])
-
-                if let exportedURL = appState.exportedDataURL {
-                    ShareLink(item: exportedURL) {
-                        Label("Share export", systemImage: "square.and.arrow.up")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(RoadSecondaryButtonStyle())
-                }
-            }
-        }
-    }
-
-    private func binding<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>) -> Binding<Value> {
-        Binding(
-            get: { appState.preferences[keyPath: keyPath] },
-            set: { newValue in
-                var updated = appState.preferences
-                updated[keyPath: keyPath] = newValue
-                Task { await appState.updatePreferences(updated) }
-            }
         )
     }
 }

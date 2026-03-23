@@ -63,7 +63,6 @@ struct AppTabShellView: View {
             }
             .tag(AppTab.garage)
         }
-        .preferredColorScheme(.dark)
         .tint(RoadTheme.primaryAction)
         .alert("Vroom", isPresented: Binding(get: { appState.currentAlertMessage != nil }, set: { if !$0 { appState.clearAlert() } })) {
             Button("OK", role: .cancel) {
@@ -78,6 +77,22 @@ struct AppTabShellView: View {
                     .environmentObject(appState)
             }
             .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .overlay(alignment: .top) {
+            if let banner = appState.currentBanner {
+                RoadFloatingBanner(title: banner.title, message: banner.message, tone: banner.tone)
+                    .padding(.horizontal, RoadSpacing.regular)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task(id: banner.id) {
+                        try? await Task.sleep(for: .seconds(2.2))
+                        guard appState.currentBanner?.id == banner.id else { return }
+                        withAnimation(RoadMotion.relaxed) {
+                            appState.clearBanner()
+                        }
+                    }
+            }
         }
     }
 }

@@ -39,11 +39,10 @@ struct AnalyzeView: View {
         appState.traps.filter { filteredDriveIDs.contains($0.driveID) }
     }
 
-    private var overviewMetrics: [RoadMetricPresentation] {
+    private var highlightMetrics: [RoadMetricPresentation] {
         [
             RoadMetricPresentation(id: "insights-distance", label: "Distance", value: RoadFormatting.distance(snapshot.distanceTotal), icon: "arrow.left.and.right", accent: .neutral),
             RoadMetricPresentation(id: "insights-average", label: "Average drive", value: RoadFormatting.duration(snapshot.durationAverage), icon: "clock", accent: .electric),
-            RoadMetricPresentation(id: "insights-events", label: "Event rate", value: RoadFormatting.decimal(snapshot.eventFrequency, places: 2), icon: "waveform.path.ecg", accent: .alert),
             RoadMetricPresentation(id: "insights-trend", label: "Score trend", value: RoadFormatting.scoreTrend(snapshot.scoreTrend), icon: "chart.line.uptrend.xyaxis", accent: .success)
         ]
     }
@@ -52,39 +51,55 @@ struct AnalyzeView: View {
         RoadScreenScaffold {
             RoadPageHeader(
                 title: "Insights",
-                subtitle: "Review recent driving trends, top speeds, and repeatable segments."
+                subtitle: "Start with the short answer for this period, then drill into the patterns that deserve attention."
             )
 
-            overviewSection
+            summarySection
             drivingEventsSection
-            topSpeedsSection
+            peakSpeedsSection
             segmentsSection
+
+            if appState.subscriptionSnapshot.tier == .free {
+                premiumUpsellSection
+            }
         }
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationTitle("Insights")
+        .navigationBarTitleDisplayMode(.large)
+        .refreshable {
+            await appState.refreshData()
+        }
         .task {
             await appState.refreshData()
         }
     }
 
-    private var overviewSection: some View {
-        RoadPanel {
+    private var summarySection: some View {
+        RoadHeroPanel {
             VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                RoadSectionHeader(
-                    title: selectedPeriod == .week ? "Last 7 days" : "Last 30 days",
-                    subtitle: snapshot.patternSummary
-                )
-
-                HStack(spacing: RoadSpacing.small) {
-                    periodButton(.week, title: "Last 7 days")
-                    periodButton(.month, title: "Last 30 days")
+                Picker("Period", selection: $selectedPeriod) {
+                    Text("Week").tag(InsightPeriod.week)
+                    Text("Month").tag(InsightPeriod.month)
                 }
+                .pickerStyle(.segmented)
+
+                VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                    Text(selectedPeriod == .week ? "Last 7 days" : "Last 30 days")
+                        .font(RoadTypography.sectionTitle)
+                        .foregroundStyle(RoadTheme.textPrimary)
+
+                    Text(snapshot.patternSummary)
+                        .font(RoadTypography.supporting)
+                        .foregroundStyle(RoadTheme.textSecondary)
+                }
+
+                RoadMetricGrid(metrics: highlightMetrics, minimumWidth: 120)
 
                 Chart(weeklyTrend) { point in
                     AreaMark(
                         x: .value("Day", point.date, unit: .day),
                         y: .value("Score", point.value)
                     )
-                    .foregroundStyle(RoadTheme.info.opacity(0.24))
+                    .foregroundStyle(RoadTheme.info.opacity(0.14))
 
                     LineMark(
                         x: .value("Day", point.date, unit: .day),
@@ -105,9 +120,22 @@ struct AnalyzeView: View {
                     }
                 }
                 .frame(height: 200)
-
-                RoadMetricGrid(metrics: overviewMetrics)
             }
+        }
+    }
+
+    private var premiumUpsellSection: some View {
+        RoadStateCard(
+            title: "Premium keeps deeper insights ready",
+            message: "Upgrade when you want richer trend surfaces and future premium insight expansions. The current summary stays usable without it.",
+            icon: "sparkles",
+            tone: .info
+        ) {
+            NavigationLink("See plans") {
+                PaywallView()
+            }
+            .buttonStyle(RoadSubtleButtonStyle(tint: RoadTheme.premium))
+            .padding(.top, RoadSpacing.small)
         }
     }
 
@@ -115,41 +143,32 @@ struct AnalyzeView: View {
         VStack(alignment: .leading, spacing: RoadSpacing.compact) {
             RoadSectionHeader(
                 title: "Driving events",
-                subtitle: "Review which event types showed up most often in the selected time range."
+                subtitle: "What showed up most often in the selected period."
             )
 
             if eventCounts.isEmpty {
                 RoadEmptyState(
                     title: "No events recorded",
-                    message: "Complete more drives to see recurring events here.",
+                    message: "Complete more drives to see recurring event patterns here.",
                     icon: "waveform.path.ecg"
                 )
             } else {
-                ForEach(eventCounts, id: \.0) { eventType, count in
-                    RoadPanel {
-                        HStack(spacing: RoadSpacing.regular) {
-                            Image(systemName: eventType.iconName)
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(accent(for: eventType))
-                                .frame(width: RoadHeight.compact, height: RoadHeight.compact)
-                                .background(
-                                    RoundedRectangle(cornerRadius: RoadRadius.small, style: .continuous)
-                                        .fill(accent(for: eventType).opacity(0.14))
-                                )
+                RoadGroupedRows {
+                    ForEach(Array(eventCounts.prefix(4).enumerated()), id: \.element.0) { index, item in
+                        let (eventType, count) = item
 
-                            VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
-                                Text(eventType.displayTitle)
-                                    .font(.headline.weight(.semibold))
-                                    .foregroundStyle(RoadTheme.textPrimary)
-
-                                Text("\(count) recorded")
-                                    .font(RoadTypography.caption)
-                                    .foregroundStyle(RoadTheme.textSecondary)
-                            }
-
-                            Spacer(minLength: 0)
-
+                        RoadInfoRow(
+                            icon: eventType.iconName,
+                            iconTint: accent(for: eventType),
+                            title: eventType.displayTitle,
+                            subtitle: "\(count) recorded in the selected period"
+                        ) {
                             RoadCapsuleLabel(text: impactText(for: count), tint: accent(for: eventType))
+                        }
+                        .padding(.vertical, RoadSpacing.xSmall)
+
+                        if index < min(eventCounts.count, 4) - 1 {
+                            RoadRowDivider()
                         }
                     }
                 }
@@ -157,39 +176,34 @@ struct AnalyzeView: View {
         }
     }
 
-    private var topSpeedsSection: some View {
+    private var peakSpeedsSection: some View {
         VStack(alignment: .leading, spacing: RoadSpacing.compact) {
             RoadSectionHeader(
-                title: "Top speeds",
-                subtitle: "See the highest recorded speed moments from the selected time range."
+                title: "Peak speed moments",
+                subtitle: "The highest recorded speed moments in the selected period."
             )
 
             if filteredTraps.isEmpty {
                 RoadEmptyState(
-                    title: "No top speeds saved",
-                    message: "Top speed moments will appear here after Vroom records them.",
+                    title: "No peak speed moments yet",
+                    message: "Peak speed moments will appear here after Vroom records them.",
                     icon: "hare"
                 )
             } else {
-                ForEach(filteredTraps.prefix(3)) { trap in
-                    RoadPanel {
-                        HStack {
-                            VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
-                                Text(RoadFormatting.speed(trap.peakSpeedKPH))
-                                    .font(RoadTypography.sectionTitle)
-                                    .foregroundStyle(RoadTheme.textPrimary)
+                RoadGroupedRows {
+                    ForEach(Array(filteredTraps.prefix(3).enumerated()), id: \.element.id) { index, trap in
+                        RoadInfoRow(
+                            icon: trap.isFavorite ? "star.fill" : "hare.fill",
+                            iconTint: trap.isFavorite ? RoadTheme.success : RoadTheme.warning,
+                            title: RoadFormatting.speed(trap.peakSpeedKPH),
+                            subtitle: RoadFormatting.shortDate.string(from: trap.timestamp)
+                        ) {
+                            RoadCapsuleLabel(text: trap.isFavorite ? "Saved" : "Recorded", tint: trap.isFavorite ? RoadTheme.success : RoadTheme.warning)
+                        }
+                        .padding(.vertical, RoadSpacing.xSmall)
 
-                                Text(RoadFormatting.shortDate.string(from: trap.timestamp))
-                                    .font(RoadTypography.caption)
-                                    .foregroundStyle(RoadTheme.textSecondary)
-                            }
-
-                            Spacer()
-
-                            RoadCapsuleLabel(
-                                text: trap.isFavorite ? "Saved" : "Recorded",
-                                tint: trap.isFavorite ? RoadTheme.success : RoadTheme.warning
-                            )
+                        if index < min(filteredTraps.count, 3) - 1 {
+                            RoadRowDivider()
                         }
                     }
                 }
@@ -200,57 +214,59 @@ struct AnalyzeView: View {
     private var segmentsSection: some View {
         VStack(alignment: .leading, spacing: RoadSpacing.compact) {
             RoadSectionHeader(
-                title: "Segments",
-                subtitle: "Compare saved segments and check your current best run."
+                title: "Saved segments",
+                subtitle: "Compare the best recorded run on each saved segment."
             )
 
             if appState.zones.isEmpty {
                 RoadEmptyState(
-                    title: "No segments yet",
+                    title: "No saved segments yet",
                     message: "Saved segments will appear here after you create them.",
                     icon: "scope"
                 )
             } else {
-                ForEach(appState.zones) { zone in
-                    let best = appState.personalBest(for: zone.id)
+                VStack(alignment: .leading, spacing: RoadSpacing.compact) {
+                    ForEach(appState.zones) { zone in
+                        let best = appState.personalBest(for: zone.id)
 
-                    RoadPanel {
-                        VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                            ViewThatFits(in: .horizontal) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                        RoadPanel {
+                            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
+                                ViewThatFits(in: .horizontal) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                                            Text(zone.name)
+                                                .font(.headline.weight(.semibold))
+                                                .foregroundStyle(RoadTheme.textPrimary)
+
+                                            Text(zone.status.displayTitle)
+                                                .font(RoadTypography.meta)
+                                                .foregroundStyle(RoadTheme.textSecondary)
+                                        }
+
+                                        Spacer()
+
+                                        if let best {
+                                            RoadCapsuleLabel(text: "\(RoadFormatting.decimal(best.elapsed, places: 1))s best", tint: RoadTheme.success)
+                                        }
+                                    }
+
+                                    VStack(alignment: .leading, spacing: RoadSpacing.compact) {
                                         Text(zone.name)
                                             .font(.headline.weight(.semibold))
                                             .foregroundStyle(RoadTheme.textPrimary)
 
                                         Text(zone.status.displayTitle)
-                                            .font(RoadTypography.caption)
+                                            .font(RoadTypography.meta)
                                             .foregroundStyle(RoadTheme.textSecondary)
-                                    }
 
-                                    Spacer()
-
-                                    if let best {
-                                        RoadCapsuleLabel(text: "\(RoadFormatting.decimal(best.elapsed, places: 1))s best", tint: RoadTheme.success)
+                                        if let best {
+                                            RoadCapsuleLabel(text: "\(RoadFormatting.decimal(best.elapsed, places: 1))s best", tint: RoadTheme.success)
+                                        }
                                     }
                                 }
 
-                                VStack(alignment: .leading, spacing: RoadSpacing.compact) {
-                                    Text(zone.name)
-                                        .font(.headline.weight(.semibold))
-                                        .foregroundStyle(RoadTheme.textPrimary)
-
-                                    Text(zone.status.displayTitle)
-                                        .font(RoadTypography.caption)
-                                        .foregroundStyle(RoadTheme.textSecondary)
-
-                                    if let best {
-                                        RoadCapsuleLabel(text: "\(RoadFormatting.decimal(best.elapsed, places: 1))s best", tint: RoadTheme.success)
-                                    }
-                                }
+                                RoadMetricGrid(metrics: zoneMetrics(for: zone, best: best), minimumWidth: 120)
                             }
-
-                            RoadMetricGrid(metrics: zoneMetrics(for: zone, best: best), minimumWidth: 120)
                         }
                     }
                 }
@@ -274,19 +290,10 @@ struct AnalyzeView: View {
         }
     }
 
-    private func periodButton(_ period: InsightPeriod, title: String) -> some View {
-        Button {
-            selectedPeriod = period
-        } label: {
-            RoadSelectableChip(title: title, isSelected: selectedPeriod == period)
-        }
-        .buttonStyle(.plain)
-    }
-
     private func zoneMetrics(for zone: SpeedZone, best: SpeedZoneRun?) -> [RoadMetricPresentation] {
         guard let best else {
             return [
-                RoadMetricPresentation(id: "zone-status-\(zone.id)", label: "Status", value: "Waiting for a run", icon: "scope", accent: .neutral)
+                RoadMetricPresentation(id: "zone-status-\(zone.id)", label: "Status", value: "Waiting", icon: "scope", accent: .neutral)
             ]
         }
 

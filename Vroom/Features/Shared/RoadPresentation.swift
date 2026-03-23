@@ -38,6 +38,7 @@ struct ReplayCursorPresentation: Hashable, Sendable {
     let index: Int
     let progress: Double
     let timestamp: String
+    let elapsedTime: String
     let speed: String
     let distance: String
 }
@@ -108,7 +109,7 @@ enum RoadPresentationBuilder {
             metrics: [
                 RoadMetricPresentation(id: "journal-distance-\(drive.id)", label: "Distance", value: RoadFormatting.distance(drive.distanceMeters), icon: "arrow.left.and.right", accent: .neutral),
                 RoadMetricPresentation(id: "journal-top-\(drive.id)", label: "Peak Speed", value: RoadFormatting.speed(drive.topSpeedKPH), icon: "hare.fill", accent: .alert),
-                RoadMetricPresentation(id: "journal-score-\(drive.id)", label: "Score", value: "\(drive.scoreSummary.overall)", icon: "rosette", accent: .success)
+                RoadMetricPresentation(id: "journal-events-\(drive.id)", label: "Events", value: "\(drive.summary.eventCount)", icon: "waveform.path.ecg", accent: .premium)
             ]
         )
     }
@@ -134,15 +135,31 @@ enum RoadPresentationBuilder {
 
     static func replayCursor(trace: [RoutePointSample], progress: Double) -> ReplayCursorPresentation {
         guard let snapshot = replaySnapshot(trace: trace, progress: progress) else {
-            return ReplayCursorPresentation(index: 0, progress: 0, timestamp: "--", speed: RoadFormatting.speed(0), distance: RoadFormatting.distance(0))
+            return ReplayCursorPresentation(index: 0, progress: 0, timestamp: "--", elapsedTime: RoadFormatting.playbackTime(0), speed: RoadFormatting.speed(0), distance: RoadFormatting.distance(0))
         }
 
         return ReplayCursorPresentation(
             index: snapshot.displayIndex,
             progress: snapshot.normalizedProgress,
             timestamp: RoadFormatting.shortDate.string(from: snapshot.timestamp),
+            elapsedTime: RoadFormatting.playbackTime(snapshot.elapsedTime),
             speed: RoadFormatting.speed(snapshot.speedKPH),
             distance: RoadFormatting.distance(snapshot.distanceMeters)
+        )
+    }
+
+    static func replayCursor(playhead: ReplayMapPlayhead?) -> ReplayCursorPresentation {
+        guard let playhead else {
+            return ReplayCursorPresentation(index: 0, progress: 0, timestamp: "--", elapsedTime: RoadFormatting.playbackTime(0), speed: RoadFormatting.speed(0), distance: RoadFormatting.distance(0))
+        }
+
+        return ReplayCursorPresentation(
+            index: playhead.displayIndex,
+            progress: playhead.normalizedProgress,
+            timestamp: RoadFormatting.shortDate.string(from: playhead.timestamp),
+            elapsedTime: RoadFormatting.playbackTime(playhead.elapsedTime),
+            speed: RoadFormatting.speed(playhead.speedKPH),
+            distance: RoadFormatting.distance(playhead.distanceMeters)
         )
     }
 
@@ -226,14 +243,16 @@ enum RoutePresentationBuilder {
         build(
             trace: trace,
             events: events,
-            replayProgress: replayIndex.map(Double.init)
+            replayProgress: replayIndex.map(Double.init),
+            replayPlayhead: nil
         )
     }
 
     static func build(
         trace: [RoutePointSample],
         events: [DrivingEvent],
-        replayProgress: Double?
+        replayProgress: Double?,
+        replayPlayhead: ReplayMapPlayhead? = nil
     ) -> RoutePresentation {
         let path = trace.map(\.coordinate)
         var markers: [RouteMarkerPresentation] = []
@@ -275,7 +294,18 @@ enum RoutePresentationBuilder {
         }
 
         let highlightedCoordinate: GeoCoordinate?
-        if let replayProgress, let snapshot = replaySnapshot(trace: trace, progress: replayProgress) {
+        if let replayPlayhead {
+            highlightedCoordinate = replayPlayhead.coordinate
+            markers.append(
+                RouteMarkerPresentation(
+                    id: UUID(),
+                    title: "Replay",
+                    subtitle: nil,
+                    coordinate: replayPlayhead.coordinate,
+                    kind: .replay
+                )
+            )
+        } else if let replayProgress, let snapshot = replaySnapshot(trace: trace, progress: replayProgress) {
             highlightedCoordinate = snapshot.coordinate
             markers.append(
                 RouteMarkerPresentation(
@@ -312,6 +342,7 @@ private extension Collection {
 private struct ReplaySnapshot {
     let displayIndex: Int
     let normalizedProgress: Double
+    let elapsedTime: TimeInterval
     let timestamp: Date
     let speedKPH: Double
     let distanceMeters: Double
@@ -324,6 +355,7 @@ private func replaySnapshot(trace: [RoutePointSample], progress: Double) -> Repl
         return ReplaySnapshot(
             displayIndex: 0,
             normalizedProgress: 0,
+            elapsedTime: 0,
             timestamp: first.timestamp,
             speedKPH: first.speedKPH,
             distanceMeters: 0,
@@ -339,6 +371,7 @@ private func replaySnapshot(trace: [RoutePointSample], progress: Double) -> Repl
 
     let lower = trace[lowerIndex]
     let upper = trace[upperIndex]
+    let timestamp = lower.timestamp.addingTimeInterval(upper.timestamp.timeIntervalSince(lower.timestamp) * fraction)
     let distanceBeforeSegment = trace.prefix(lowerIndex + 1).adjacentPairs().reduce(0.0) { partial, pair in
         partial + pair.0.coordinate.distance(to: pair.1.coordinate)
     }
@@ -347,7 +380,8 @@ private func replaySnapshot(trace: [RoutePointSample], progress: Double) -> Repl
     return ReplaySnapshot(
         displayIndex: min(Int(clampedProgress.rounded()), trace.count - 1),
         normalizedProgress: clampedProgress / maxProgress,
-        timestamp: lower.timestamp.addingTimeInterval(upper.timestamp.timeIntervalSince(lower.timestamp) * fraction),
+        elapsedTime: timestamp.timeIntervalSince(first.timestamp),
+        timestamp: timestamp,
         speedKPH: lower.speedKPH + ((upper.speedKPH - lower.speedKPH) * fraction),
         distanceMeters: distanceBeforeSegment + (segmentDistance * fraction),
         coordinate: lower.coordinate.interpolated(to: upper.coordinate, fraction: fraction)

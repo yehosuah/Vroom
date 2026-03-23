@@ -6,28 +6,10 @@ struct RootScene: View {
     var body: some View {
         Group {
             if appState.isBootstrapping {
-                ZStack {
-                    RoadBackdrop()
-                    VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                        ProgressView()
-                            .tint(RoadTheme.primaryAction)
-                        Text("Preparing Vroom")
-                            .font(RoadTypography.sectionTitle)
-                            .foregroundStyle(RoadTheme.textPrimary)
-                        Text("Loading your drives and settings.")
-                            .font(RoadTypography.supporting)
-                            .foregroundStyle(RoadTheme.textSecondary)
-                    }
-                    .padding(RoadSpacing.large)
-                    .background(
-                        RoundedRectangle(cornerRadius: RoadRadius.large, style: .continuous)
-                            .fill(RoadTheme.surfaceRaised)
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: RoadRadius.large, style: .continuous)
-                            .strokeBorder(RoadTheme.border)
-                    }
-                }
+                RoadLoadingState(
+                    title: "Loading your drives",
+                    message: "Checking vehicles, routes, and settings."
+                )
                 .task {
                     await appState.bootstrap()
                 }

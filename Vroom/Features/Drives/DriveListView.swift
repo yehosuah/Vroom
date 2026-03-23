@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 private enum HistoryDateScope: String, CaseIterable, Identifiable {
     case all
@@ -12,9 +15,9 @@ private enum HistoryDateScope: String, CaseIterable, Identifiable {
         case .all:
             return "All"
         case .recent:
-            return "Last 7 days"
+            return "7 Days"
         case .month:
-            return "Last 30 days"
+            return "30 Days"
         }
     }
 
@@ -30,11 +33,20 @@ private enum HistoryDateScope: String, CaseIterable, Identifiable {
     }
 }
 
+private struct HistoryShareContext: Identifiable {
+    let id = UUID()
+    let drive: Drive
+    let payload: SharePayload
+}
+
 struct DriveListView: View {
     @EnvironmentObject private var appState: AppStateStore
+
     @State private var searchText = ""
     @State private var favoritesOnly = false
     @State private var dateScope: HistoryDateScope = .all
+    @State private var replayDrive: Drive?
+    @State private var shareContext: HistoryShareContext?
 
     private var filteredDrives: [Drive] {
         appState.drives.filter { drive in
@@ -58,6 +70,22 @@ struct DriveListView: View {
         }
     }
 
+    private var groupedDrives: [(title: String, drives: [Drive])] {
+        let groups = Dictionary(grouping: filteredDrives) { drive in
+            Self.monthFormatter.string(from: drive.startedAt)
+        }
+
+        return groups
+            .map { (title: $0.key, drives: $0.value.sorted(by: { $0.startedAt > $1.startedAt })) }
+            .sorted { lhs, rhs in
+                guard
+                    let lhsDate = lhs.drives.first?.startedAt,
+                    let rhsDate = rhs.drives.first?.startedAt
+                else { return lhs.title > rhs.title }
+                return lhsDate > rhsDate
+            }
+    }
+
     private var vehicleFilterLabel: String {
         appState.vehicle(for: appState.selectedVehicleFilter)?.nickname ?? "All vehicles"
     }
@@ -66,70 +94,145 @@ struct DriveListView: View {
         [("All vehicles", nil)] + appState.vehicles.map { ($0.nickname, Optional($0.id)) }
     }
 
-    private var resultSubtitle: String {
-        if filteredDrives.isEmpty {
-            return searchText.isEmpty ? "No drives match the current filters." : "Try a different search or clear a filter."
+    private var filterSummary: String {
+        var parts: [String] = []
+        parts.append("\(filteredDrives.count) drive\(filteredDrives.count == 1 ? "" : "s")")
+        if appState.selectedVehicleFilter != nil {
+            parts.append(vehicleFilterLabel)
         }
-        return favoritesOnly ? "Showing saved drives only." : "Open a drive to review the full route and events."
+        if favoritesOnly {
+            parts.append("saved only")
+        }
+        if dateScope != .all {
+            parts.append(dateScope.title)
+        }
+        return parts.joined(separator: " • ")
     }
 
     var body: some View {
-        RoadScreenScaffold {
-            RoadPageHeader(
-                title: "History",
-                subtitle: "Search, filter, and reopen your completed drives."
-            )
+        List {
+            Section {
+                filterBar
+                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 12, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
 
-            filterBar
-
-            VStack(alignment: .leading, spacing: RoadSpacing.compact) {
-                RoadSectionHeader(
-                    title: filteredDrives.isEmpty ? "No drives found" : "\(filteredDrives.count) drive\(filteredDrives.count == 1 ? "" : "s")",
-                    subtitle: resultSubtitle
-                )
-
-                if filteredDrives.isEmpty {
+            if groupedDrives.isEmpty {
+                Section {
                     RoadEmptyState(
                         title: searchText.isEmpty ? "No drives yet" : "No matching drives",
-                        message: searchText.isEmpty ? "Start and save a drive to build your history." : "Try a different search or clear one of the filters.",
+                        message: searchText.isEmpty
+                            ? "Track a drive first, then history becomes the place you come back to."
+                            : "Try a different search term or clear one of the active filters.",
                         icon: searchText.isEmpty ? "road.lanes" : "magnifyingglass"
                     )
-                } else {
-                    ForEach(filteredDrives) { drive in
-                        HistoryDriveRow(drive: drive)
-                            .environmentObject(appState)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
+            } else {
+                ForEach(groupedDrives, id: \.title) { section in
+                    Section(section.title) {
+                        ForEach(section.drives) { drive in
+                            NavigationLink {
+                                DriveDetailView(drive: drive)
+                            } label: {
+                                HistoryDriveRow(drive: drive)
+                                    .environmentObject(appState)
+                            }
+                            .contextMenu {
+                                Button(drive.favorite ? "Remove saved drive" : "Save drive") {
+                                    Task { await appState.toggleFavorite(for: drive) }
+                                }
+
+                                Button("Watch replay") {
+                                    replayDrive = drive
+                                }
+
+                                Button("Share drive") {
+                                    Task {
+                                        let payload = await appState.sharePayload(for: drive)
+                                        shareContext = HistoryShareContext(drive: drive, payload: payload)
+                                    }
+                                }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button {
+                                    Task { await appState.toggleFavorite(for: drive) }
+                                } label: {
+                                    Label(drive.favorite ? "Unsave" : "Save", systemImage: drive.favorite ? "star.slash" : "star")
+                                }
+                                .tint(RoadTheme.primaryAction)
+
+                                Button {
+                                    replayDrive = drive
+                                } label: {
+                                    Label("Replay", systemImage: "play.circle")
+                                }
+                                .tint(RoadTheme.info)
+                            }
+                            .accessibilityIdentifier("History.Drive.\(drive.summary.title.replacingOccurrences(of: " ", with: ""))")
+                        }
                     }
                 }
             }
         }
-        .toolbar(.hidden, for: .navigationBar)
+        .scrollContentBackground(.hidden)
+        .listStyle(.insetGrouped)
+        .background(RoadBackdrop())
+        .navigationTitle("History")
+        .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search drives")
+        .refreshable {
+            await appState.refreshData()
+        }
         .task {
             await appState.refreshData()
+        }
+        .sheet(item: $shareContext) { context in
+            NavigationStack {
+                ShareComposerView(drive: context.drive, payload: context.payload)
+                    .environmentObject(appState)
+            }
+            .presentationDragIndicator(.visible)
+        }
+        .navigationDestination(item: $replayDrive) { drive in
+            RouteReplayView(drive: drive)
         }
         .accessibilityIdentifier("History.Screen")
     }
 
     private var filterBar: some View {
         RoadPanel(padding: RoadSpacing.regular) {
-            VStack(alignment: .leading, spacing: RoadSpacing.compact) {
+            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
                 ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .center, spacing: RoadSpacing.regular) {
-                        Text("Filters")
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(RoadTheme.textPrimary)
+                    HStack(alignment: .top, spacing: RoadSpacing.regular) {
+                        VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
+                            Text("Find a remembered drive fast.")
+                                .font(RoadTypography.label)
+                                .foregroundStyle(RoadTheme.textPrimary)
 
-                        Spacer(minLength: RoadSpacing.regular)
+                            Text(filterSummary)
+                                .font(RoadTypography.meta)
+                                .foregroundStyle(RoadTheme.textSecondary)
+                        }
 
-                        vehicleFilterMenu
+                        Spacer(minLength: 0)
+
+                        vehicleMenu
                     }
 
                     VStack(alignment: .leading, spacing: RoadSpacing.compact) {
-                        Text("Filters")
-                            .font(.headline.weight(.semibold))
+                        Text("Find a remembered drive fast.")
+                            .font(RoadTypography.label)
                             .foregroundStyle(RoadTheme.textPrimary)
 
-                        vehicleFilterMenu
+                        Text(filterSummary)
+                            .font(RoadTypography.meta)
+                            .foregroundStyle(RoadTheme.textSecondary)
+
+                        vehicleMenu
                     }
                 }
 
@@ -159,7 +262,7 @@ struct DriveListView: View {
         }
     }
 
-    private var vehicleFilterMenu: some View {
+    private var vehicleMenu: some View {
         Menu {
             ForEach(vehicleOptions, id: \.title) { option in
                 Button(option.title) {
@@ -172,7 +275,7 @@ struct DriveListView: View {
                     .foregroundStyle(RoadTheme.info)
 
                 Text(vehicleFilterLabel)
-                    .font(RoadTypography.caption.weight(.semibold))
+                    .font(RoadTypography.label)
                     .foregroundStyle(RoadTheme.textPrimary)
                     .lineLimit(1)
 
@@ -193,11 +296,19 @@ struct DriveListView: View {
         }
         .buttonStyle(.plain)
     }
+
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "LLLL yyyy"
+        return formatter
+    }()
 }
 
 private struct HistoryDriveRow: View {
     @EnvironmentObject private var appState: AppStateStore
     let drive: Drive
+
+    private static let previewSize = CGSize(width: 112, height: 92)
 
     private var currentDrive: Drive {
         appState.drives.first(where: { $0.id == drive.id }) ?? drive
@@ -207,93 +318,123 @@ private struct HistoryDriveRow: View {
         RoadPresentationBuilder.journalRow(drive: currentDrive, vehicle: appState.vehicle(for: currentDrive.vehicleID))
     }
 
-    private var stats: [RoadMetricPresentation] {
-        [
-            RoadMetricPresentation(
-                id: "history-score-\(currentDrive.id)",
-                label: "Score",
-                value: "\(currentDrive.scoreSummary.overall)",
-                icon: "rosette",
-                accent: .success
-            ),
-            RoadMetricPresentation(
-                id: "history-distance-\(currentDrive.id)",
-                label: "Distance",
-                value: RoadFormatting.distance(currentDrive.distanceMeters),
-                icon: "arrow.left.and.right",
-                accent: .neutral
-            ),
-            RoadMetricPresentation(
-                id: "history-duration-\(currentDrive.id)",
-                label: "Drive time",
-                value: RoadFormatting.duration(currentDrive.duration),
-                icon: "clock",
-                accent: .electric
-            )
-        ]
+    private var previewState: DriveRoutePreviewState {
+        appState.routePreviewState(for: currentDrive.id, size: Self.previewSize)
     }
 
     var body: some View {
-        RoadPanel {
-            VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                NavigationLink {
-                    DriveDetailView(drive: currentDrive)
-                } label: {
-                    VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(alignment: .top, spacing: RoadSpacing.regular) {
-                                titleBlock
-                                Spacer(minLength: RoadSpacing.regular)
-                                timestampBlock
-                            }
+        HStack(alignment: .top, spacing: RoadSpacing.compact) {
+            previewCard
 
-                            VStack(alignment: .leading, spacing: RoadSpacing.compact) {
-                                titleBlock
-                                timestampBlock
-                            }
-                        }
+            VStack(alignment: .leading, spacing: RoadSpacing.small) {
+                HStack(alignment: .top, spacing: RoadSpacing.compact) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(presentation.title)
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(RoadTheme.textPrimary)
 
-                        HStack(spacing: RoadSpacing.small) {
-                            RoadCapsuleLabel(text: presentation.vehicleLabel, tint: RoadTheme.info, icon: "car.fill")
-
-                            if presentation.isFavorite {
-                                RoadCapsuleLabel(text: "Saved", tint: RoadTheme.primaryAction, icon: "star.fill")
-                            }
-                        }
-
-                        RoadMetricGrid(metrics: stats, minimumWidth: 120)
+                        Text(presentation.subtitle)
+                            .font(RoadTypography.meta)
+                            .foregroundStyle(RoadTheme.textSecondary)
+                            .lineLimit(2)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("History.Drive.\(presentation.title.replacingOccurrences(of: " ", with: ""))")
 
-                NavigationLink {
-                    RouteReplayView(drive: currentDrive)
-                } label: {
-                    Label("Replay drive", systemImage: "play.circle")
+                    Spacer(minLength: 0)
+
+                    RoadCapsuleLabel(text: "Score \(currentDrive.scoreSummary.overall)", tint: RoadTheme.success)
                 }
-                .buttonStyle(RoadSecondaryButtonStyle())
+
+                HStack(spacing: RoadSpacing.compact) {
+                    RoadCapsuleLabel(text: presentation.vehicleLabel, tint: RoadTheme.info, icon: "car.fill")
+                    RoadCapsuleLabel(text: RoadFormatting.distance(currentDrive.distanceMeters), tint: RoadTheme.primaryAction, icon: "arrow.left.and.right")
+
+                    if presentation.isFavorite {
+                        RoadCapsuleLabel(text: "Saved", tint: RoadTheme.warning, icon: "star.fill")
+                    }
+                }
+
+                Text(presentation.timestamp)
+                    .font(RoadTypography.caption)
+                    .foregroundStyle(RoadTheme.textMuted)
             }
         }
-    }
-
-    private var titleBlock: some View {
-        VStack(alignment: .leading, spacing: RoadSpacing.xSmall) {
-            Text(presentation.title)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(RoadTheme.textPrimary)
-
-            Text(presentation.subtitle)
-                .font(RoadTypography.caption)
-                .foregroundStyle(RoadTheme.textSecondary)
-                .lineLimit(2)
+        .padding(.vertical, RoadSpacing.small)
+        .contentShape(Rectangle())
+        .task(id: PreviewTaskID(driveID: currentDrive.id, mapStyle: appState.preferences.mapStyle)) {
+            await appState.ensureRouteAssets(
+                for: currentDrive.id,
+                includePreview: true,
+                previewSize: Self.previewSize,
+                mapStyle: appState.preferences.mapStyle
+            )
         }
     }
 
-    private var timestampBlock: some View {
-        Text(presentation.timestamp)
-            .font(RoadTypography.caption)
-            .foregroundStyle(RoadTheme.textMuted)
+    @ViewBuilder
+    private var previewCard: some View {
+        switch previewState {
+        case .idle, .loading:
+            previewPlaceholder(title: "Loading", icon: "point.3.filled.connected.trianglepath", showsProgress: true)
+
+        case .ready(let data):
+            if let image = previewImage(from: data) {
+                image
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: Self.previewSize.width, height: Self.previewSize.height)
+                    .clipShape(RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
+                            .strokeBorder(RoadTheme.border)
+                    }
+                    .accessibilityIdentifier("History.Preview.\(currentDrive.id.uuidString)")
+            } else {
+                previewPlaceholder(title: "Route", icon: "map", showsProgress: false)
+            }
+
+        case .unavailable:
+            previewPlaceholder(title: "No route", icon: "map", showsProgress: false)
+        }
     }
+
+    private func previewPlaceholder(title: String, icon: String, showsProgress: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
+                .fill(RoadTheme.backgroundRaised)
+
+            VStack(spacing: RoadSpacing.xSmall) {
+                if showsProgress {
+                    ProgressView()
+                        .tint(RoadTheme.primaryAction)
+                } else {
+                    Image(systemName: icon)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(RoadTheme.info)
+                }
+
+                Text(title)
+                    .font(RoadTypography.caption.weight(.semibold))
+                    .foregroundStyle(RoadTheme.textSecondary)
+            }
+        }
+        .frame(width: Self.previewSize.width, height: Self.previewSize.height)
+        .overlay {
+            RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
+                .strokeBorder(RoadTheme.border)
+        }
+    }
+
+    private func previewImage(from data: Data) -> Image? {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: data) else { return nil }
+        return Image(uiImage: image)
+        #else
+        return nil
+        #endif
+    }
+}
+
+private struct PreviewTaskID: Hashable {
+    let driveID: UUID
+    let mapStyle: AppMapStyle
 }

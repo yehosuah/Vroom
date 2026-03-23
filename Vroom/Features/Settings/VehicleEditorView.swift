@@ -3,93 +3,78 @@ import SwiftUI
 struct VehicleEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var appState: AppStateStore
+
     let editingVehicle: Vehicle?
 
     @State private var draft: VehicleEditorDraft
+    @State private var showingArchiveConfirmation = false
 
     init(editingVehicle: Vehicle? = nil) {
         self.editingVehicle = editingVehicle
         _draft = State(initialValue: editingVehicle.map(VehicleEditorDraft.init) ?? VehicleEditorDraft())
     }
 
+    private var nicknameIsValid: Bool {
+        !draft.nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         NavigationStack {
-            RoadScreenScaffold(bottomPadding: 40) {
-                RoadPageHeader(
-                    title: editingVehicle == nil ? "Add vehicle" : "Edit vehicle",
-                    subtitle: "Update the vehicle information used in Garage and History."
-                )
+            Form {
+                Section {
+                    TextField("Vehicle name", text: $draft.nickname)
+                        .textInputAutocapitalization(.words)
 
-                RoadPanel {
-                    VStack(alignment: .leading, spacing: RoadSpacing.regular) {
-                        RoadTextField(
-                            title: "Vehicle name",
-                            helper: "Shown in History and Garage.",
-                            text: $draft.nickname
-                        )
-                        RoadTextField(
-                            title: "Make",
-                            helper: "Optional.",
-                            text: $draft.make
-                        )
-                        RoadTextField(
-                            title: "Model",
-                            helper: "Optional.",
-                            text: $draft.model
-                        )
+                    TextField("Make", text: $draft.make)
+                        .textInputAutocapitalization(.words)
 
-                        RoadFormField(title: "Year", helper: "Use the model year that best matches this vehicle.") {
-                            Stepper(value: $draft.year, in: 1990...Calendar.current.component(.year, from: Date()) + 1) {
-                                Text("\(draft.year)")
-                                    .font(.headline.weight(.semibold))
-                                    .foregroundStyle(RoadTheme.textPrimary)
-                            }
-                            .padding(.horizontal, RoadSpacing.regular)
-                            .frame(minHeight: RoadHeight.regular)
-                            .background(
-                                RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                                    .fill(RoadTheme.backgroundRaised)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                                    .strokeBorder(RoadTheme.border)
-                            }
-                            .tint(RoadTheme.primaryAction)
-                        }
+                    TextField("Model", text: $draft.model)
+                        .textInputAutocapitalization(.words)
 
-                        RoadFormField(title: "Set as primary vehicle", helper: "Use this vehicle by default for new drives.") {
-                            Toggle(isOn: $draft.isPrimary) {
-                                Text(draft.isPrimary ? "Primary vehicle" : "Not primary")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(RoadTheme.textPrimary)
-                            }
-                            .tint(RoadTheme.primaryAction)
-                            .padding(.horizontal, RoadSpacing.regular)
-                            .frame(minHeight: RoadHeight.regular)
-                            .background(
-                                RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                                    .fill(RoadTheme.backgroundRaised)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: RoadRadius.medium, style: .continuous)
-                                    .strokeBorder(RoadTheme.border)
-                            }
-                        }
+                    Stepper("Year \(draft.year)", value: $draft.year, in: 1990...Calendar.current.component(.year, from: Date()) + 1)
+                } header: {
+                    Text("Vehicle")
+                } footer: {
+                    Text("Vehicle name is required. Make and model are optional.")
+                }
+
+                Section {
+                    Toggle("Use as default vehicle", isOn: $draft.isPrimary)
+                } header: {
+                    Text("Defaults")
+                } footer: {
+                    Text("The default vehicle is the one new drives use unless you change it later.")
+                }
+
+                if !nicknameIsValid {
+                    Section {
+                        Label("Add a vehicle name before saving.", systemImage: "exclamationmark.circle.fill")
+                            .font(RoadTypography.meta)
+                            .foregroundStyle(RoadTheme.destructive)
                     }
                 }
 
                 if let vehicle = editingVehicle {
-                    RoadPanel {
-                        Button("Archive vehicle", role: .destructive) {
+                    Section {
+                        Button("Archive Vehicle", role: .destructive) {
+                            showingArchiveConfirmation = true
+                        }
+                    } footer: {
+                        Text("Archived vehicles are removed from the active garage.")
+                    }
+                    .confirmationDialog("Archive this vehicle?", isPresented: $showingArchiveConfirmation, titleVisibility: .visible) {
+                        Button("Archive Vehicle", role: .destructive) {
                             Task {
                                 await appState.archiveVehicle(vehicle)
                                 dismiss()
                             }
                         }
-                        .buttonStyle(RoadSecondaryButtonStyle())
+                        Button("Cancel", role: .cancel) {}
                     }
                 }
             }
+            .navigationTitle(editingVehicle == nil ? "Add Vehicle" : "Edit Vehicle")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -101,7 +86,7 @@ struct VehicleEditorView: View {
                             dismiss()
                         }
                     }
-                    .disabled(draft.nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!nicknameIsValid)
                 }
             }
         }

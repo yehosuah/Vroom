@@ -69,11 +69,11 @@ final class CoreLocationService: NSObject, @unchecked Sendable, LocationMonitori
         case .balanced:
             manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
             manager.distanceFilter = 10
-            manager.pausesLocationUpdatesAutomatically = true
+            manager.pausesLocationUpdatesAutomatically = false
         case .lowPower:
             manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
             manager.distanceFilter = 25
-            manager.pausesLocationUpdatesAutomatically = true
+            manager.pausesLocationUpdatesAutomatically = false
         }
     }
 }

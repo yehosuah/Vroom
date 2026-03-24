@@ -19,15 +19,25 @@ struct TripDetectorTests {
         #expect(transitions[2] == .started)
     }
 
-    @Test func stopsTripAfterConfiguredStationarySamples() {
+    @Test func stopsTripAfterConfiguredStationaryDuration() {
+        var detector = TripDetector(configuration: .default)
+        let baseTime = Date()
+        let transitions = (0..<6).map { offset in
+            detector.ingest(sample: sample(at: baseTime.addingTimeInterval(Double(offset * 30)), lat: 34.0, lon: -118.0, speed: 0), motion: nil)
+        }
+
+        #expect(transitions.prefix(5).allSatisfy { $0 == .none })
+        #expect(transitions[5] == .stopped)
+    }
+
+    @Test func doesNotStopTripBeforeConfiguredStationaryDuration() {
         var detector = TripDetector(configuration: .default)
         let baseTime = Date()
         let transitions = (0..<6).map { offset in
             detector.ingest(sample: sample(at: baseTime.addingTimeInterval(Double(offset)), lat: 34.0, lon: -118.0, speed: 0), motion: nil)
         }
 
-        #expect(transitions.prefix(5).allSatisfy { $0 == .none })
-        #expect(transitions[5] == .stopped)
+        #expect(transitions.allSatisfy { $0 == .none })
     }
 
     private func sample(at date: Date, lat: Double, lon: Double, speed: Double) -> RoutePointSample {

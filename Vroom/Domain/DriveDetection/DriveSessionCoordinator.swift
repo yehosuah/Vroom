@@ -89,6 +89,7 @@ actor DriveSessionCoordinator {
         currentSession = DriveSession(
             sessionID: driveID,
             state: .active,
+            recordingMode: mode,
             startedAt: startedAt,
             activeVehicleID: vehicleID,
             liveMetrics: .zero

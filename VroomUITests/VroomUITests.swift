@@ -33,6 +33,7 @@ final class VroomUITests: XCTestCase {
 
         let stopButton = app.buttons["End Drive"]
         XCTAssertTrue(stopButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Acquiring"].waitForExistence(timeout: 5))
         let activeStopButton = stopButton
         activeStopButton.tap()
 

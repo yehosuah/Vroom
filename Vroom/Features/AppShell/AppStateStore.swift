@@ -220,7 +220,13 @@ final class AppStateStore: ObservableObject {
         do {
             let vehicleID = selectedVehicleFilter ?? profile?.defaultVehicleID ?? vehicles.first?.id
             try await container.driveTrackingService.startManualDrive(vehicleID: vehicleID)
-            showBanner(title: "Drive started", message: "Vroom is tracking this route now.", tone: .info)
+            let message: String
+            if permissionState.location == .always {
+                message = "Vroom started the drive and is acquiring the first route point."
+            } else {
+                message = "Drive started. Vroom is acquiring the first route point. Finish location setup for reliable background capture."
+            }
+            showBanner(title: "Drive started", message: message, tone: .info)
         } catch {
             currentAlertMessage = error.localizedDescription
         }
@@ -435,6 +441,11 @@ final class AppStateStore: ObservableObject {
 
     func clearBanner() {
         currentBanner = nil
+    }
+
+    func handleScenePhaseChange(_ phase: ScenePhase) async {
+        guard phase == .active, hasBootstrappedOnce else { return }
+        await refreshPermissions()
     }
 
     private func showBanner(title: String, message: String? = nil, tone: RoadBannerTone) {

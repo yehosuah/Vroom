@@ -190,7 +190,9 @@ enum RoadPresentationBuilder {
 
     private static func accent(for quality: SignalQuality) -> RoadAccent {
         switch quality {
-        case .unknown, .good:
+        case .unknown:
+            return .electric
+        case .good:
             return .success
         case .degraded:
             return .premium
@@ -201,7 +203,9 @@ enum RoadPresentationBuilder {
 
     private static func signalSubtitle(for quality: SignalQuality) -> String {
         switch quality {
-        case .unknown, .good:
+        case .unknown:
+            return "Waiting for the first route point before live tracking is confirmed."
+        case .good:
             return "Route recording is active and updating normally."
         case .degraded:
             return "Recording continues, but location accuracy is reduced."

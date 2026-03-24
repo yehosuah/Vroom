@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RootScene: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var appState: AppStateStore
 
     var body: some View {
@@ -18,6 +19,9 @@ struct RootScene: View {
             } else {
                 AppTabShellView()
             }
+        }
+        .task(id: scenePhase) {
+            await appState.handleScenePhaseChange(scenePhase)
         }
     }
 }

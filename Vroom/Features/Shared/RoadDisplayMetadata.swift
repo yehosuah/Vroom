@@ -353,7 +353,7 @@ extension SignalQuality {
     var displayTitle: String {
         switch self {
         case .unknown:
-            return "Connecting"
+            return "Acquiring"
         case .good:
             return "Ready"
         case .degraded:

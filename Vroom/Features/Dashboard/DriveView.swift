@@ -471,7 +471,9 @@ struct DriveView: View {
 
     private func signalTint(for quality: SignalQuality) -> Color {
         switch quality {
-        case .unknown, .good:
+        case .unknown:
+            return RoadTheme.info
+        case .good:
             return RoadTheme.success
         case .degraded:
             return RoadTheme.warning
@@ -482,7 +484,9 @@ struct DriveView: View {
 
     private func signalSubtitle(for quality: SignalQuality) -> String {
         switch quality {
-        case .unknown, .good:
+        case .unknown:
+            return "Waiting for the first route point before live tracking is confirmed."
+        case .good:
             return "Route recording is active and updating normally."
         case .degraded:
             return "Recording continues, but location accuracy is reduced."
